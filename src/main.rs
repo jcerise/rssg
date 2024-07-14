@@ -1,8 +1,10 @@
+use std::error::Error;
 use serde_derive::{Deserialize, Serialize};
 use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use config::Config;
 use pulldown_cmark::{html, Options, Parser};
 use tera::{Context, Tera};
 use yaml_front_matter::YamlFrontMatter;
@@ -16,6 +18,22 @@ struct PageInfo {
     date: String,
     favorite_numbers: Vec<f64>,
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SiteConfig {
+    site_title: String,
+    base_url: String,
+    theme: String,
+    content_location: String,
+    output_location: String,
+}
+
+fn load_config() -> Result<SiteConfig, Box<dyn Error>> {
+    let settings = Config::builder()
+        .add_source(config::File::with_name("./config"))
+        .build()?;
+    settings.try_deserialize::<SiteConfig>().map_err(|e| e.into())
 }
 
 fn read_dir(path: &str) -> std::io::Result<Vec<std::path::PathBuf>> {
@@ -39,13 +57,14 @@ fn parse_markdown(content: &str) -> String {
     html_output
 }
 
-fn render_template(tera: &Tera, html_content: &str, title: &str) -> Result<String, tera::Error> {
+fn render_template(tera: &Tera, html_content: &str, title: &String, config: &SiteConfig) -> Result<String, tera::Error> {
     let mut context = Context::new();
-    context.insert("title", title);
+    context.insert("post_title", title);
+    context.insert("site_title", &config.site_title);
     context.insert("content", html_content);
+    context.insert("base_url", &config.base_url);
 
     tera.render("template.html", &context)
-
 }
 
 fn write_output_file(output_path: &Path, content: &str) -> std::io::Result<()> {
@@ -53,7 +72,7 @@ fn write_output_file(output_path: &Path, content: &str) -> std::io::Result<()> {
     file.write_all(content.as_bytes())
 }
 
-fn generate_site(input_dir: &str, output_dir: &str, tera: &Tera)  -> std::io::Result<()>{
+fn generate_site(input_dir: &str, output_dir: &str, tera: &Tera, config: SiteConfig) -> std::io::Result<()>{
     fs::create_dir_all(output_dir)?;
 
     let files = read_dir(input_dir)?;
@@ -63,8 +82,7 @@ fn generate_site(input_dir: &str, output_dir: &str, tera: &Tera)  -> std::io::Re
         let content = fs::read_to_string(&file_path)?;
         let mut page_info = collect_metadata(&content)?;
         let html_content = parse_markdown(&content);
-        let title = Path::new(&file_path).file_stem().unwrap().to_str().unwrap();
-        let rendered_content = render_template(tera, &html_content,title).unwrap();
+        let rendered_content = render_template(tera, &html_content, &page_info.title, &config).unwrap();
         let output_file_path =
             Path::new(output_dir)
                 .join(
@@ -78,14 +96,17 @@ fn generate_site(input_dir: &str, output_dir: &str, tera: &Tera)  -> std::io::Re
         pages.push(page_info);
     }
 
-    generate_home_page(&output_dir, tera, &pages)?;
+    generate_home_page(&output_dir, tera, &pages, &config)?;
 
     Ok(())
 }
 
-fn generate_home_page(output_dir: &str, tera: &Tera, pages: &[PageInfo]) -> std::io::Result<()> {
+fn generate_home_page(output_dir: &str, tera: &Tera, pages: &[PageInfo], config: &SiteConfig) -> std::io::Result<()> {
     let mut context = Context::new();
+    context.insert("site_title", &config.site_title);
     context.insert("pages", pages);
+    context.insert("base_url", &config.base_url);
+
 
     let rendered_home = tera.render("index.html", &context).unwrap();
     let output_file_path = Path::new(output_dir).join("index.html");
@@ -93,22 +114,30 @@ fn generate_home_page(output_dir: &str, tera: &Tera, pages: &[PageInfo]) -> std:
 }
 
 fn collect_metadata(content: &str) -> std::io::Result<PageInfo> {
-    let result = YamlFrontMatter::parse::<PageInfo>(&content).unwrap();
-    let page_info = match result.metadata {
-        PageInfo {title, description, tags, similar_posts, date, favorite_numbers, path} => PageInfo {
-            title,
-            description,
-            tags,
-            similar_posts,
-            date,
-            favorite_numbers,
-            path: "".to_string(),
-        }
-    };
-    Ok(page_info)
+    let result = YamlFrontMatter::parse::<PageInfo>(&content);
+
+    match result {
+        Ok(data) => {
+            let page_info = match data.metadata {
+                PageInfo {title, description, tags, similar_posts, date, favorite_numbers, path} => {
+                    PageInfo {
+                        title,
+                        description,
+                        tags,
+                        similar_posts,
+                        date,
+                        favorite_numbers,
+                        path: "".to_string(),
+                    }
+                },
+            };
+            Ok(page_info)
+        },
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+    }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>>{
     // Initialize Tera for template rendering
     let tera = match Tera::new("templates/**/*") {
         Ok(t) => t,
@@ -118,10 +147,14 @@ fn main() {
         }
     };
 
-    let input_dir = "./content";
-    let output_dir = "./output";
+    let config = load_config()?;
 
-    generate_site(input_dir, output_dir, &tera).unwrap();
+    let input_dir = format!("./{}", &config.content_location);
+    let output_dir = format!("./{}", &config.output_location);
+
+    generate_site(&input_dir, &output_dir, &tera, config)?;
+
+    Ok(())
 }
 
 #[cfg(test)]

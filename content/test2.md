@@ -1,5 +1,5 @@
 ---
-title: 'Parsing a Markdown file metadata into a struct'
+title: 'Advanced Markdown generation test'
 description: 'This tutorial walks you through the practice of parsing markdown files for metadata'
 tags: ['markdown', 'rust', 'files', 'parsing', 'metadata']
 similar_posts:

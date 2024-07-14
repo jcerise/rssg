@@ -1,0 +1,5 @@
+site_title: "Jeremy's Ramblings"
+base_url: "/"
+theme: "basic"
+content_location: "content"
+output_location: "output"
